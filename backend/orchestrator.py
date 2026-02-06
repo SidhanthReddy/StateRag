@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Callable, List, Optional
 import time
 
 from state_rag_manager import StateRAGManager
@@ -9,6 +9,7 @@ from state_rag_enums import ArtifactSource
 
 from llm_adapter import LLMAdapter
 from llm_output_parser import parse_llm_output
+from runtime_validator import validate_runtime
 
 
 class Orchestrator:
@@ -49,6 +50,8 @@ class Orchestrator:
         self,
         user_request: str,
         allowed_paths: List[str],
+        runtime_validate: bool = False,
+        event_callback: Optional[Callable[[str, Optional[dict]], None]] = None,
     ):
         """
         Executes one full user interaction.
@@ -58,47 +61,86 @@ class Orchestrator:
 
         # 1. Retrieve authoritative project state
         file_paths = None if "*" in allowed_paths else allowed_paths
+        if event_callback:
+            event_callback("state_retrieval_started", None)
         active_artifacts = self.state_rag.retrieve(
             file_paths=file_paths
         )
+        if event_callback:
+            event_callback("state_retrieval_completed", {"count": len(active_artifacts)})
 
         # FIX #1: Pre-validate authority BEFORE expensive LLM call
         # This prevents wasting API quota on requests that will fail validation
         self._pre_validate_authority(active_artifacts, allowed_paths)
+        if event_callback:
+            event_callback("authority_prevalidated", None)
 
         # 2. Retrieve advisory global knowledge
+        if event_callback:
+            event_callback("global_rag_retrieval_started", None)
         global_refs = self.global_rag.retrieve(
             query=user_request,
             k=3
         )
+        if event_callback:
+            event_callback("global_rag_retrieval_completed", {"count": len(global_refs)})
 
         # 3. Build strict prompt
+        if event_callback:
+            event_callback("prompt_build_started", None)
         prompt = self._build_prompt(
             user_request=user_request,
             active_artifacts=active_artifacts,
             global_refs=global_refs,
             allowed_paths=allowed_paths,
         )
+        if event_callback:
+            event_callback("prompt_build_completed", None)
 
         # 4. Invoke LLM (stateless) with retry logic
+        if event_callback:
+            event_callback("llm_call_started", None)
         raw_output = self._llm_generate_with_retry(prompt)
+        if event_callback:
+            event_callback("llm_call_completed", None)
 
         # 5. Parse LLM output (strict contract)
         proposed = parse_llm_output(raw_output)
+        if event_callback:
+            event_callback("llm_output_parsed", {"count": len(proposed)})
 
         # 6. Validate proposed changes
+        if event_callback:
+            event_callback("validation_started", None)
         result = self.validator.validate(
             proposed=proposed,
             active_artifacts=active_artifacts,
             allowed_paths=allowed_paths,
         )
+        if event_callback:
+            event_callback("validation_completed", {"ok": result.ok})
 
         if not result.ok:
             raise RuntimeError(
                 f"Validation failed: {result.reason}"
             )
 
+        if runtime_validate:
+            runtime_artifacts = self._build_runtime_artifacts(
+                active_artifacts=active_artifacts,
+                proposed=result.artifacts,
+            )
+            ok, errors = validate_runtime(runtime_artifacts)
+            if not ok:
+                raise RuntimeError(
+                    "Runtime validation failed: " + "; ".join(errors)
+                )
+            if event_callback:
+                event_callback("runtime_validation_completed", {"ok": True})
+
         # 7. Commit validated artifacts
+        if event_callback:
+            event_callback("commit_started", None)
         committed = []
 
         for p in result.artifacts:
@@ -126,6 +168,8 @@ class Orchestrator:
                 self.state_rag.commit(artifact)
             )
 
+        if event_callback:
+            event_callback("commit_completed", {"count": len(committed)})
         return committed
 
     # --------------------------------------------------
@@ -155,6 +199,7 @@ class Orchestrator:
         """
         if "*" in allowed_paths:
             return
+
         user_protected = [
             a for a in active_artifacts
             if a.source == ArtifactSource.user_modified
@@ -182,113 +227,26 @@ class Orchestrator:
         - Rate limits (429)
         - Timeouts
         - Server errors (500, 503)
-        
-        Does NOT retry on:
-        - Invalid API key (401)
-        - Bad request (400)
-        - Other permanent errors
-        
-        Args:
-            prompt: Prompt to send to LLM
-            max_retries: Maximum number of retry attempts
-        
-        Returns:
-            LLM response text
-        
-        Raises:
-            Exception: If non-transient error or max retries exceeded
         """
-        for attempt in range(max_retries):
-            try:
-                return self.llm.generate(prompt)
-                
-            except Exception as e:
-                error_msg = str(e).lower()
-                
-                # Check if error is transient (should retry)
-                transient_keywords = [
-                    'timeout',
-                    'rate limit',
-                    '429',  # Too Many Requests
-                    '503',  # Service Unavailable
-                    '500',  # Internal Server Error
-                    'connection',
-                    'temporary',
-                ]
-                
-                is_transient = any(
-                    keyword in error_msg 
-                    for keyword in transient_keywords
-                )
-                
-                if is_transient and attempt < max_retries - 1:
-                    # Exponential backoff: 1s, 2s, 4s
-                    wait_time = 2 ** attempt
-                    print(
-                        f"⚠️  LLM error (attempt {attempt + 1}/{max_retries}): {e}\n"
-                        f"    Retrying in {wait_time}s..."
-                    )
-                    time.sleep(wait_time)
-                    continue
-                
-                # Non-transient error or max retries exceeded
-                if is_transient:
-                    raise RuntimeError(
-                        f"LLM failed after {max_retries} retries. "
-                        f"Last error: {e}"
-                    )
-                else:
-                    # Don't retry non-transient errors
-                    raise
-
-        # Should never reach here, but just in case
-        raise RuntimeError(f"Unexpected retry loop exit after {max_retries} attempts")
-
-    def _build_prompt(
-        self,
-        user_request: str,
-        active_artifacts,
-        global_refs,
-        allowed_paths,
-    ) -> str:
-        """
-        Constructs a strict, authority-aware prompt for the LLM.
-        """
-
-        parts = []
-
-        parts.append(
-            "SYSTEM:\n"
-            "You are an AI website builder.\n"
-            "You are stateless.\n"
-            "PROJECT STATE is authoritative.\n"
-            "GLOBAL REFERENCES are advisory.\n"
-            "Modify only explicitly allowed files.\n"
-            "Output full updated files only.\n"
-        )
-
-        parts.append("\nPROJECT STATE (AUTHORITATIVE):\n")
-        for a in active_artifacts:
-            parts.append(f"--- {a.file_path} ---\n{a.content}\n")
-
-        parts.append("\nGLOBAL REFERENCES (ADVISORY):\n")
+        prompt_sections = []
+        prompt_sections.append("\nGLOBAL REFERENCES (ADVISORY):\n")
         for i, ref in enumerate(global_refs, 1):
-            parts.append(f"{i}. {ref.title}\n{ref.content}\n")
+            prompt_sections.append(f"{i}. {ref.title}\n{ref.content}\n")
 
-        parts.append("\nALLOWED FILES:\n")
+        prompt_sections.append("\nALLOWED FILES:\n")
         for p in allowed_paths:
-            parts.append(f"- {p}")
+            prompt_sections.append(f"- {p}")
 
-        parts.append("\nUSER REQUEST:\n")
-        parts.append(user_request)
+        prompt_sections.append("\nUSER REQUEST:\n")
+        prompt_sections.append(user_request)
 
-        parts.append(
+        prompt_sections.append(
             "\nOUTPUT FORMAT:\n"
             "FILE: <file_path>\n"
             "<full file content>\n"
         )
 
-        return "\n".join(parts)
+        return "\n".join(prompt_sections)
 
     def _infer_type(self, file_path: str):
         if "components/" in file_path:
@@ -296,3 +254,22 @@ class Orchestrator:
         if "app/" in file_path:
             return "page"
         return "config"
+
+    def _build_runtime_artifacts(self, active_artifacts, proposed):
+        active_lookup = {a.file_path: a for a in active_artifacts}
+        merged = dict(active_lookup)
+
+        for p in proposed:
+            old = active_lookup.get(p.file_path)
+            artifact_type = old.type if old else self._infer_type(p.file_path)
+            source = old.source if old else ArtifactSource.ai_modified
+            merged[p.file_path] = Artifact(
+                type=artifact_type,
+                name=p.file_path.split("/")[-1],
+                file_path=p.file_path,
+                content=p.content,
+                language=p.language,
+                source=source,
+            )
+
+        return list(merged.values())
