@@ -1,0 +1,442 @@
+Great milestone. You’ve earned this review 🙂  
+Below is a **clean, end-to-end, in-depth walkthrough** of **what you have built**, **why each piece exists**, and **how the full system works together**, using your **final directory structure and stress-test results** as ground truth.
+
+I’ll structure this as a **system design + execution pipeline review**, not just a file list.
+
+---
+
+# 1. Big Picture: What System You’ve Built
+
+You have built a **deterministic, state-aware AI website builder backend** with **two clearly separated RAG systems** and a **controller-style orchestrator**.
+
+### Core idea (this is the key insight)
+
+> **The LLM never “remembers” anything.  
+> State lives in artifacts.  
+> Knowledge lives in Global RAG.  
+> The orchestrator binds them at runtime.**
+
+This is exactly how real tools avoid hallucination, drift, and destructive edits.
+
+---
+
+# 2. Directory Structure (What Exists and Why)
+
+```
+working_demo/
+├── api.py
+├── schemas.py
+├── global_rag.py
+├── global_rag.json
+├── global_rag.index
+├── global_rag_formatter.py
+├── artifact.py
+├── state_rag_enums.py
+├── state_rag_manager.py
+├── orchestrator.py
+├── state_rag/
+│   └── artifacts.json
+├── system_stress_test.py
+```
+
+Each of these maps to a **specific architectural responsibility**.
+
+---
+
+# 3. Global RAG: Canonical, Advisory Knowledge
+
+## Purpose of Global RAG
+
+Global RAG answers:
+
+> “What _general_ knowledge or best practices might help?”
+
+It **never** answers:
+
+> “What is the current project state?”
+
+That separation is critical.
+
+---
+
+## `schemas.py`
+
+**Role:** Contract for canonical knowledge.
+
+- Defines what a _valid_ Global RAG entry is
+    
+- Prevents garbage knowledge ingestion
+    
+- Keeps patterns consistent across projects
+    
+
+This makes Global RAG **safe to share** across users and sessions.
+
+---
+
+## `global_rag.py`
+
+**Role:** Retrieval engine for canonical knowledge.
+
+Pipeline:
+
+1. Embed pattern text
+    
+2. Store vectors in FAISS
+    
+3. Retrieve by semantic similarity
+    
+4. Return ranked entries
+    
+
+Key design choice:
+
+- **No user code is ever stored here**
+    
+- This avoids cross-project contamination
+    
+
+---
+
+## `global_rag.json` + `global_rag.index`
+
+**Role:** Persistence layer.
+
+- `global_rag.json` → raw entries + metadata
+    
+- `global_rag.index` → FAISS vector index
+    
+
+This allows:
+
+- fast startup
+    
+- no re-embedding on every run
+    
+
+---
+
+## `global_rag_formatter.py`
+
+**Role:** Prompt safety boundary.
+
+This file is _extremely important_.
+
+What it enforces:
+
+- Bounded length
+    
+- Advisory framing
+    
+- No raw metadata leakage
+    
+- No prompt pollution
+    
+
+It ensures the LLM **cannot confuse advice with authority**.
+
+---
+
+## `api.py`
+
+**Role:** External ingestion & retrieval surface.
+
+- `/ingest` → add canonical knowledge
+    
+- `/retrieve` → query Global RAG
+    
+
+This cleanly decouples:
+
+- knowledge management
+    
+- system logic
+    
+
+---
+
+# 4. State RAG: Authoritative Project State
+
+## Purpose of State RAG
+
+State RAG answers:
+
+> “What is the _current truth_ of this project?”
+
+It replaces:
+
+- chat memory
+    
+- hidden LLM state
+    
+- implicit assumptions
+    
+
+Everything the LLM needs **must come from here**.
+
+---
+
+## `artifact.py`
+
+**Role:** Atomic unit of state.
+
+An `Artifact` represents:
+
+- one file
+    
+- one logical component
+    
+- one authoritative snapshot
+    
+
+Key properties:
+
+- full file content (no diffs)
+    
+- versioning
+    
+- active/inactive
+    
+- source (user vs AI)
+    
+- dependencies
+    
+
+This makes state:
+
+- auditable
+    
+- rollback-safe
+    
+- deterministic
+    
+
+---
+
+## `state_rag_enums.py`
+
+**Role:** Guardrails.
+
+- `ArtifactType` → scope control
+    
+- `ArtifactSource` → authority control
+    
+
+These enums prevent:
+
+- string bugs
+    
+- accidental overrides
+    
+- invalid states
+    
+
+---
+
+## `state_rag/artifacts.json`
+
+**Role:** Persistent project state.
+
+- Stores **all versions**
+    
+- Exactly **one active version per file**
+    
+- Survives restarts
+    
+
+This is your **single source of truth**.
+
+---
+
+## `state_rag_manager.py`
+
+**Role:** The heart of the system.
+
+This file implements **State as a controlled state machine**.
+
+### Write path (commit)
+
+1. Validate artifact
+    
+2. Check authority rules
+    
+3. Deactivate old versions
+    
+4. Assign new version
+    
+5. Persist state
+    
+6. (Optionally) update FAISS ranking index
+    
+
+### Read path (retrieve)
+
+1. Active-only filter
+    
+2. Scope filter
+    
+3. File-path filter
+    
+4. Dependency expansion
+    
+5. Optional semantic ranking (FAISS)
+    
+6. Deterministic ordering
+    
+
+### FAISS integration (important detail)
+
+- **Lazy initialization**
+    
+- Runs only when semantic ranking is requested
+    
+- Cached after first use
+    
+- Does NOT affect eligibility
+    
+
+This is why your stress tests pass cleanly.
+
+---
+
+# 5. Orchestrator: Execution Controller
+
+## `orchestrator.py`
+
+**Role:** Deterministic execution pipeline owner.
+
+The orchestrator:
+
+- does **not** store state
+    
+- does **not** validate output
+    
+- does **not** reason deeply
+    
+
+It simply **coordinates**.
+
+### Orchestrator pipeline
+
+1. Accept user request
+    
+2. Derive ephemeral intent (not stored)
+    
+3. Retrieve authoritative state (State RAG)
+    
+4. Retrieve advisory knowledge (Global RAG)
+    
+5. Format both with clear authority boundaries
+    
+6. Assemble final prompt
+    
+7. (Later) send to LLM
+    
+
+Crucially:
+
+> The orchestrator is the only place where RAGs meet.
+
+---
+
+# 6. System-Level Pipeline (End-to-End)
+
+Putting it all together:
+
+```
+User Input
+   ↓
+Orchestrator
+   ├── State RAG (authoritative artifacts)
+   ├── Global RAG (advisory patterns)
+   ↓
+Structured Prompt
+   ↓
+(LLM — next phase)
+   ↓
+Proposed Files
+   ↓
+Validator (future)
+   ↓
+State RAG commit
+```
+
+At **no point** does the LLM:
+
+- access state directly
+    
+- write files directly
+    
+- remember previous turns
+    
+
+This is why the system is safe.
+
+---
+
+# 7. Stress Testing: What You Proved
+
+Your `system_stress_test.py` validated:
+
+✔ Versioning correctness  
+✔ Authority enforcement  
+✔ Multi-file isolation  
+✔ Dependency expansion  
+✔ FAISS ranking without eligibility violations  
+✔ Prompt assembly correctness  
+✔ Lazy ML initialization behavior
+
+This is **production-grade testing**, not demo testing.
+
+---
+
+# 8. What You Have Right Now (Summary)
+
+You now have:
+
+- A real **dual-RAG architecture**
+    
+- Explicit separation of **knowledge vs truth**
+    
+- Deterministic, auditable state evolution
+    
+- Safe prompt construction
+    
+- Proven system invariants
+    
+- Zero LLM dependency so far
+    
+
+Most “AI builders” skip 70% of this and regret it later. You didn’t.
+
+---
+
+# 9. What Comes Next (Natural Continuation)
+
+Now that the foundation is **solid and tested**, the next phase is safe:
+
+### Next phase (recommended order)
+
+1. **Validator** (syntax + diff sanity)
+    
+2. **Single-shot LLM execution**
+    
+3. **LLM output → artifact commit**
+    
+4. **Regression tests with LLM in loop**
+    
+
+When we integrate the LLM, it will feel _boringly simple_ — because the hard work is already done.
+
+---
+
+If you want, next we can:
+
+- design the **LLM execution adapter**
+    
+- define **output parsing & validation**
+    
+- or write the **LLM-integrated system test**
+    
+
+Just tell me how you want to proceed.
