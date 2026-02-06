@@ -1,0 +1,49 @@
+[
+  {
+    "id": "hero_pattern",
+    "category": "component",
+    "title": "Hero Section Pattern",
+    "content": "Hero section with headline, subheadline, CTA button, and background. Use h1 for headline, p for subtitle. Make it visually striking with large text and good spacing.",
+    "tags": [
+      "hero",
+      "landing"
+    ],
+    "framework": "react",
+    "styling": "tailwind"
+  },
+  {
+    "id": "navbar_pattern",
+    "category": "component",
+    "title": "Navbar Pattern",
+    "content": "Sticky navbar with logo on left, nav links in center, CTA on right. Use 'sticky top-0 z-50'. Include shadow for depth. Make it responsive with mobile menu.",
+    "tags": [
+      "navbar",
+      "navigation"
+    ],
+    "framework": "react",
+    "styling": "tailwind"
+  },
+  {
+    "id": "carousel_pattern",
+    "category": "component",
+    "title": "Carousel/Slider Pattern",
+    "content": "Image carousel with prev/next buttons and indicators. Use useState for current slide. Include smooth transitions with transform. Auto-advance optional.",
+    "tags": [
+      "carousel",
+      "slider"
+    ],
+    "framework": "react",
+    "styling": "tailwind"
+  },
+  {
+    "id": "footer_pattern",
+    "category": "component",
+    "title": "Footer Pattern",
+    "content": "Footer with multiple columns: company info, links, social media. Use grid layout. Include copyright notice. Dark background with light text works well.",
+    "tags": [
+      "footer"
+    ],
+    "framework": "react",
+    "styling": "tailwind"
+  }
+]
