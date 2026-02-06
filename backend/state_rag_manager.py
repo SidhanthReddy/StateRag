@@ -7,11 +7,11 @@ from artifact import Artifact
 from state_rag_enums import ArtifactSource, ArtifactType
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATE_PATH = os.path.join(BASE_DIR, "state_rag", "artifacts.json")
+DEFAULT_STATE_PATH = os.path.join(BASE_DIR, "state_rag", "artifacts.json")
 
 
 class StateRAGManager:
-    def __init__(self):
+    def __init__(self, project_id: Optional[str] = None, base_dir: Optional[str] = None):
         # ---- Core state ----
         self.artifacts: List[Artifact] = []
 
@@ -22,16 +22,30 @@ class StateRAGManager:
 
         self._load()
 
+    def _resolve_state_path(self, project_id: Optional[str], base_dir: Optional[str]) -> str:
+        if base_dir is None:
+            base_dir = BASE_DIR
+
+        if project_id is None:
+            return DEFAULT_STATE_PATH
+
+        return os.path.join(
+            base_dir,
+            "projects",
+            project_id,
+            "state_rag",
+            "artifacts.json",
+        )
     # ======================
     # Persistence
     # ======================
 
     def _load(self):
-        if not os.path.exists(STATE_PATH):
+        if not os.path.exists(self.state_path):
             return
 
         try:
-            with open(STATE_PATH, "r") as f:
+            with open(self.state_path, "r") as f:
                 content = f.read().strip()
                 if not content:
                     return
@@ -49,8 +63,8 @@ class StateRAGManager:
             self._embedder = None  # Reset to trigger lazy init on next semantic search
 
     def _persist(self):
-        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-        with open(STATE_PATH, "w") as f:
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
             json.dump(
                 [a.dict() for a in self.artifacts],
                 f,

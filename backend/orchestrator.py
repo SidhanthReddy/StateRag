@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import time
 
 from state_rag_manager import StateRAGManager
@@ -29,9 +29,15 @@ class Orchestrator:
     - Retry logic for transient LLM failures
     """
 
-    def __init__(self, llm_provider: str = "mock"):
-        self.state_rag = StateRAGManager()
-        self.global_rag = GlobalRAG()
+    def __init__(
+        self,
+        llm_provider: str = "mock",
+        project_id: Optional[str] = None,
+        state_rag: Optional[StateRAGManager] = None,
+        global_rag: Optional[GlobalRAG] = None,
+    ):
+        self.state_rag = state_rag or StateRAGManager(project_id=project_id)
+        self.global_rag = global_rag or GlobalRAG()
         self.validator = Validator()
         self.llm = LLMAdapter(provider=llm_provider)
 
@@ -51,8 +57,9 @@ class Orchestrator:
         """
 
         # 1. Retrieve authoritative project state
+        file_paths = None if "*" in allowed_paths else allowed_paths
         active_artifacts = self.state_rag.retrieve(
-            file_paths=allowed_paths
+            file_paths=file_paths
         )
 
         # FIX #1: Pre-validate authority BEFORE expensive LLM call
@@ -146,9 +153,11 @@ class Orchestrator:
         Raises:
             ValueError: If user-modified files exist that aren't in allowed_paths
         """
+        if "*" in allowed_paths:
+            return
         user_protected = [
-            a for a in active_artifacts 
-            if a.source == ArtifactSource.user_modified 
+            a for a in active_artifacts
+            if a.source == ArtifactSource.user_modified
             and a.file_path not in allowed_paths
         ]
         

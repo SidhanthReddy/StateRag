@@ -35,7 +35,8 @@ class ValidationRule:
         allowed_paths: List[str],
     ) -> ValidationResult:
         raise NotImplementedError
-
+def _is_allowed(file_path: str, allowed_paths: List[str]) -> bool:
+    return "*" in allowed_paths or file_path in allowed_paths
 
 # -------------------------
 # 1. Syntax Validator
@@ -88,7 +89,7 @@ class AuthorityValidator(ValidationRule):
                 #                if user_modified AND not in allowed_paths -> BLOCK
                 
                 if old.source == ArtifactSource.user_modified:
-                    if p.file_path not in allowed_paths:
+                    if not _is_allowed(p.file_path, allowed_paths):
                         # User file but NOT in allowed list = unauthorized
                         return ValidationResult(
                             ok=False,
@@ -109,7 +110,7 @@ class AuthorityValidator(ValidationRule):
 class ScopeValidator(ValidationRule):
     def check(self, proposed, active, allowed_paths):
         for p in proposed:
-            if p.file_path not in allowed_paths:
+            if not _is_allowed(p.file_path, allowed_paths):
                 return ValidationResult(
                     ok=False,
                     reason=f"Out-of-scope modification: {p.file_path}"
