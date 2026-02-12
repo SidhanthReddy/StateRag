@@ -51,7 +51,7 @@ class LLMAdapter:
 
         if self.provider == "gemini":
             return self._gemini_response_with_retry(prompt)
-
+        
         raise RuntimeError("Invalid LLM provider state")
 
     # --------------------------------------------------

@@ -11,14 +11,26 @@ DEFAULT_STATE_PATH = os.path.join(BASE_DIR, "state_rag", "artifacts.json")
 
 
 class StateRAGManager:
-    def __init__(self, project_id: Optional[str] = None, base_dir: Optional[str] = None):
-        # ---- Core state ----
-        self.artifacts: List[Artifact] = []
+    def __init__(self, project_id: str, base_dir: str = None):
+        self.project_id = project_id
 
-        # ---- FAISS (lazy) ----
+        if base_dir is None:
+            base_dir = os.path.join(os.getcwd(), "projects")
+
+        self.base_dir = base_dir
+
+        # Define state path BEFORE loading
+        self.state_path = os.path.join(
+            self.base_dir,
+            project_id,
+            "state_rag",
+            "artifacts.json"
+        )
+
+        self.artifacts = []
         self._embedder = None
         self._faiss_index = None
-        self._faiss_ids: List[str] = []
+        self._faiss_ids = []
 
         self._load()
 
@@ -183,7 +195,8 @@ class StateRAGManager:
             artifacts = self._rank_with_faiss(artifacts, user_query)
 
         # 6. Deterministic fallback order
-        artifacts.sort(key=lambda a: a.file_path)
+        else:
+            artifacts.sort(key=lambda a: a.file_path)
 
         return artifacts[:limit]
 
@@ -251,7 +264,7 @@ class StateRAGManager:
             return
 
         texts = [
-            f"{a.type} {a.name} {a.file_path}"
+            f"{a.type} {a.name} {a.file_path}\n{a.content[:1000]}"
             for a in active
         ]
 
@@ -272,14 +285,16 @@ class StateRAGManager:
             return artifacts
 
         query_emb = self._embedder.encode([query]).astype("float32")
-        _, indices = self._faiss_index.search(query_emb, len(self._faiss_ids))
+        distances, indices = self._faiss_index.search(query_emb, len(self._faiss_ids))
 
-        rank_map = {
-            self._faiss_ids[idx]: rank
-            for rank, idx in enumerate(indices[0])
-        }
+        threshold = 1.2  # tune this
 
-        return sorted(
-            artifacts,
-            key=lambda a: rank_map.get(a.artifact_id, float("inf"))
-        )
+        ranked = []
+        for dist, idx in zip(distances[0], indices[0]):
+            if idx == -1:
+                continue
+            if dist < threshold:
+                artifact_id = self._faiss_ids[idx]
+                ranked.append(next(a for a in artifacts if a.artifact_id == artifact_id))
+
+        return ranked

@@ -3,6 +3,8 @@ import shutil
 import time
 import uuid
 from typing import List, Optional
+from dotenv import load_dotenv
+load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -204,7 +206,11 @@ def preview_prompt(req: GenerateRequest):
     allowed_paths = req.allowed_paths or ["*"]
     file_paths = None if "*" in allowed_paths else req.allowed_paths
     state_rag = StateRAGManager(project_id=req.project_id)
-    active_artifacts = state_rag.retrieve(file_paths=file_paths)
+    active_artifacts = state_rag.retrieve(
+        file_paths=file_paths,
+        user_query=req.user_request
+    )
+
     global_rag = GlobalRAG()
     global_refs = global_rag.retrieve(query=req.user_request, k=3)
 
@@ -252,6 +258,7 @@ def generate_code(req: GenerateRequest):
 
     allowed_paths = req.allowed_paths or ["*"]
     llm_provider = os.getenv("LLM_PROVIDER", "mock")
+    print("Using LLM Provider:", llm_provider)
 
     state_rag = StateRAGManager(project_id=req.project_id)
     global_rag = GlobalRAG()

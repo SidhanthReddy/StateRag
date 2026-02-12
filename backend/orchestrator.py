@@ -41,6 +41,49 @@ class Orchestrator:
         self.global_rag = global_rag or GlobalRAG()
         self.validator = Validator()
         self.llm = LLMAdapter(provider=llm_provider)
+    def _build_prompt(
+        self,
+        active_artifacts,
+        global_refs,
+        user_request,
+        allowed_paths
+    ):
+        system_section = (
+            "You are an AI website builder.\n"
+            "You are stateless.\n"
+            "PROJECT STATE is authoritative.\n"
+            "GLOBAL REFERENCES are advisory.\n"
+            "Modify only explicitly allowed files.\n"
+            "Output full updated files only.\n\n"
+        )
+
+        state_section = "PROJECT STATE (AUTHORITATIVE):\n"
+        for a in active_artifacts:
+            state_section += f"\nFILE: {a.file_path}\n{a.content}\n"
+
+        global_section = "GLOBAL REFERENCES (ADVISORY):\n"
+        for ref in global_refs:
+            global_section += f"\n{ref}\n"
+
+        allowed_section = "ALLOWED FILES:\n"
+        allowed_section += "\n".join(allowed_paths)
+
+        user_section = f"\nUSER REQUEST:\n{user_request}\n"
+
+        output_section = (
+            "\nOUTPUT FORMAT:\n"
+            "FILE: <file_path>\n"
+            "<full file content>\n"
+        )
+
+        return (
+            system_section
+            + state_section
+            + global_section
+            + allowed_section
+            + user_section
+            + output_section
+        )
 
     # --------------------------------------------------
     # Public API
@@ -221,32 +264,17 @@ class Orchestrator:
         max_retries: int = 3,
     ) -> str:
         """
-        FIX #2: LLM call with exponential backoff for transient errors.
-        
-        Retries on:
-        - Rate limits (429)
-        - Timeouts
-        - Server errors (500, 503)
+        Calls LLM with simple retry logic.
         """
-        prompt_sections = []
-        prompt_sections.append("\nGLOBAL REFERENCES (ADVISORY):\n")
-        for i, ref in enumerate(global_refs, 1):
-            prompt_sections.append(f"{i}. {ref.title}\n{ref.content}\n")
-
-        prompt_sections.append("\nALLOWED FILES:\n")
-        for p in allowed_paths:
-            prompt_sections.append(f"- {p}")
-
-        prompt_sections.append("\nUSER REQUEST:\n")
-        prompt_sections.append(user_request)
-
-        prompt_sections.append(
-            "\nOUTPUT FORMAT:\n"
-            "FILE: <file_path>\n"
-            "<full file content>\n"
-        )
-
-        return "\n".join(prompt_sections)
+        attempt = 0
+        while attempt < max_retries:
+            try:
+                return self.llm.generate(prompt)
+            except Exception as e:
+                attempt += 1
+                if attempt >= max_retries:
+                    raise
+                time.sleep(2 ** attempt)
 
     def _infer_type(self, file_path: str):
         if "components/" in file_path:
