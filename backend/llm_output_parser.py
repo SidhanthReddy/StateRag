@@ -33,10 +33,13 @@ def parse_llm_output(raw: str) -> List[ProposedArtifact]:
         raise LLMOutputParseError("No FILE headers found in LLM output")
 
     artifacts: List[ProposedArtifact] = []
-
     for i, match in enumerate(matches):
         file_path = match.group(1).strip()
 
+        # Normalize JSX → TSX
+        if file_path.endswith(".jsx"):
+            file_path = file_path[:-4] + ".tsx"
+        
         if not file_path:
             raise LLMOutputParseError("Empty file path in FILE header")
 
@@ -68,14 +71,22 @@ def parse_llm_output(raw: str) -> List[ProposedArtifact]:
 
 
 def _infer_language(file_path: str) -> str:
+    file_path = file_path.lower()
+
     if file_path.endswith(".tsx"):
         return "tsx"
     if file_path.endswith(".ts"):
         return "ts"
+    if file_path.endswith(".jsx"):
+        return "js"
     if file_path.endswith(".js"):
         return "js"
     if file_path.endswith(".css"):
         return "css"
     if file_path.endswith(".json"):
         return "json"
-    return "text"
+    if file_path.endswith(".html"):
+        return "html"
+
+    return "tsx"
+

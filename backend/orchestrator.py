@@ -107,8 +107,12 @@ class Orchestrator:
         if event_callback:
             event_callback("state_retrieval_started", None)
         active_artifacts = self.state_rag.retrieve(
-            file_paths=file_paths
+            file_paths=file_paths,
+            user_query=user_request
         )
+        print("Injected artifacts:", [a.file_path for a in active_artifacts])
+
+
         if event_callback:
             event_callback("state_retrieval_completed", {"count": len(active_artifacts)})
 

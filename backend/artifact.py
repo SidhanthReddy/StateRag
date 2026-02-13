@@ -103,7 +103,7 @@ class Artifact(BaseModel):
     @field_validator("language")
     @classmethod
     def language_must_be_known(cls, v):
-        allowed = {"tsx", "ts", "js", "css", "json", "jsx"}  # Added jsx
+        allowed = {"tsx", "ts", "js", "css", "json", "jsx", "html"}  # Added jsx
         if v not in allowed:
             raise ValueError(f"Unsupported language: {v}")
         return v

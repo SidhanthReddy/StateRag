@@ -8,7 +8,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-
+from state_rag_enums import ArtifactType, ArtifactSource
 from artifact import Artifact
 from global_rag import GlobalRAG
 from orchestrator import Orchestrator
@@ -65,6 +65,158 @@ def _init_project_storage(project_id: str) -> None:
     if not os.path.exists(artifacts_path):
         with open(artifacts_path, "w") as f:
             f.write("[]")
+
+
+def _inject_react_vite_tailwind_scaffold(project_id: str):
+    state_rag = StateRAGManager(project_id=project_id)
+
+    scaffold_files = [
+        Artifact(
+            type=ArtifactType.config,
+            name="index.html",
+            file_path="index.html",
+            content="""<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>State RAG App</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+""",
+            language="html",
+            source=ArtifactSource.user_modified,
+        ),
+        Artifact(
+            type=ArtifactType.config,
+            name="package.json",
+            file_path="package.json",
+            content="""{
+  "name": "state-rag-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "vite": "^5.0.0",
+    "tailwindcss": "^3.4.0",
+    "postcss": "^8.4.0",
+    "autoprefixer": "^10.4.0",
+    "typescript": "^5.0.0"
+  }
+}
+""",
+            language="json",
+            source=ArtifactSource.user_modified,
+        ),
+        Artifact(
+            type=ArtifactType.config,
+            name="main.tsx",
+            file_path="src/main.tsx",
+            content="""import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+import "./index.css";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+""",
+            language="tsx",
+            source=ArtifactSource.user_modified,
+        ),
+        Artifact(
+            type=ArtifactType.layout,
+            name="App.tsx",
+            file_path="src/App.tsx",
+            content="""function App() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-100">
+      <h1 className="text-3xl font-bold text-gray-800">
+        State RAG App
+      </h1>
+    </div>
+  );
+}
+
+export default App;
+""",
+            language="tsx",
+            source=ArtifactSource.user_modified,
+        ),
+        Artifact(
+            type=ArtifactType.config,
+            name="index.css",
+            file_path="src/index.css",
+            content="""@tailwind base;
+@tailwind components;
+@tailwind utilities;
+""",
+            language="css",
+            source=ArtifactSource.user_modified,
+        ),
+        Artifact(
+            type=ArtifactType.config,
+            name="tailwind.config.js",
+            file_path="tailwind.config.js",
+            content="""export default {
+  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+};
+""",
+            language="js",
+            source=ArtifactSource.user_modified,
+        ),
+        Artifact(
+            type=ArtifactType.config,
+            name="postcss.config.js",
+            file_path="postcss.config.js",
+            content="""export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+""",
+            language="js",
+            source=ArtifactSource.user_modified,
+        ),
+        Artifact(
+            type=ArtifactType.config,
+            name="vite.config.ts",
+            file_path="vite.config.ts",
+            content="""import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+});
+""",
+            language="ts",
+            source=ArtifactSource.user_modified,
+        ),
+    ]
+
+    for artifact in scaffold_files:
+        state_rag.commit(artifact)
 
 
 def _token_count(text: str) -> int:
@@ -171,6 +323,9 @@ def create_project_endpoint(req: ProjectCreateRequest):
     project_id = str(uuid.uuid4())
     project = create_project(project_id=project_id, name=req.name, template=req.template)
     _init_project_storage(project_id)
+    _inject_react_vite_tailwind_scaffold(project_id)
+    print("Injecting scaffold for:", project_id)
+
     return project
 
 

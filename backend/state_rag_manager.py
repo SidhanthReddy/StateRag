@@ -192,7 +192,18 @@ class StateRAGManager:
 
         # 5. Semantic ranking (optional)
         if user_query:
-            artifacts = self._rank_with_faiss(artifacts, user_query)
+            ranked = self._rank_with_faiss(artifacts, user_query)
+        
+            # If semantic retrieval returned nothing,
+            # fall back to structural baseline (layout files)
+            if not ranked:
+                ranked = [
+                    a for a in artifacts
+                    if a.type == ArtifactType.layout
+                ]
+
+            artifacts = ranked
+
 
         # 6. Deterministic fallback order
         else:
@@ -263,10 +274,34 @@ class StateRAGManager:
             self._faiss_ids = []
             return
 
-        texts = [
-            f"{a.type} {a.name} {a.file_path}\n{a.content[:1000]}"
-            for a in active
-        ]
+        texts = []
+
+        for a in active:
+            structural_context = ""
+
+            if a.type == "layout":
+                structural_context = "This file defines the root application layout and may handle routing and page rendering."
+
+            elif a.type == "page":
+                structural_context = "This file represents a standalone application page."
+
+            elif a.type == "component":
+                structural_context = "This file defines a reusable UI component."
+
+            elif a.type == "config":
+                structural_context = "This file defines application configuration or build setup."
+
+            text = f"""
+            Artifact Type: {a.type}
+            File Path: {a.file_path}
+            Structural Role: {structural_context}
+
+            Content:
+            {a.content[:1000]}
+            """
+
+            texts.append(text)
+
 
         embeddings = self._embedder.encode(texts).astype("float32")
 
