@@ -425,7 +425,7 @@ def generate_code(req: GenerateRequest):
     )
 
     start = time.time()
-    artifacts = orchestrator.handle_request(
+    artifacts, injected = orchestrator.handle_request(
         user_request=req.user_request,
         allowed_paths=allowed_paths,
     )
@@ -434,6 +434,8 @@ def generate_code(req: GenerateRequest):
 
     return {
         "artifacts": [artifact.dict() for artifact in artifacts],
+        "injected_files": [a.file_path for a in injected],
         "llm_provider": llm_provider,
         "generation_time": round(duration, 3),
     }
+

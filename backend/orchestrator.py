@@ -6,7 +6,7 @@ from global_rag import GlobalRAG
 from validator import Validator
 from artifact import Artifact
 from state_rag_enums import ArtifactSource
-
+from state_rag_enums import ArtifactType
 from llm_adapter import LLMAdapter
 from llm_output_parser import parse_llm_output
 from runtime_validator import validate_runtime
@@ -217,7 +217,8 @@ class Orchestrator:
 
         if event_callback:
             event_callback("commit_completed", {"count": len(committed)})
-        return committed
+        return committed, active_artifacts
+
 
     # --------------------------------------------------
     # Helpers
@@ -281,12 +282,31 @@ class Orchestrator:
                 time.sleep(2 ** attempt)
 
     def _infer_type(self, file_path: str):
-        if "components/" in file_path:
-            return "component"
-        if "app/" in file_path:
-            return "page"
-        return "config"
+        path = file_path.lower()
 
+        if "src/components/" in path:
+            return ArtifactType.component
+
+        if "src/pages/" in path:
+            return ArtifactType.page
+
+        if path.endswith("app.tsx") or path.endswith("app.js"):
+            return ArtifactType.layout
+
+        if path.endswith("main.tsx") or path.endswith("main.js"):
+            return ArtifactType.layout
+
+        if (
+            path.endswith(".config.js")
+            or path.endswith(".config.ts")
+            or "config" in path
+            or path.endswith("package.json")
+            or path.endswith("vite.config.ts")
+            or path.endswith("tailwind.config.js")
+        ):
+            return ArtifactType.config
+
+        return ArtifactType.component
     def _build_runtime_artifacts(self, active_artifacts, proposed):
         active_lookup = {a.file_path: a for a in active_artifacts}
         merged = dict(active_lookup)

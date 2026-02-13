@@ -1,3 +1,4 @@
 .env
 projects/
 __pycache__/
+projects/projects.json

@@ -147,6 +147,11 @@ if col2.button("Generate"):
                     st.session_state.selected_files or ["*"]
                 )
 
+                if result.get("injected_files"):
+                    st.subheader("Files Injected Into This Generation")
+                    for f in result["injected_files"]:
+                        st.write(f"- {f}")
+
                 st.success("Generation Complete")
 
                 # Persist modified files
