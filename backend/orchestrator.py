@@ -184,6 +184,55 @@ class Orchestrator:
                 )
             if event_callback:
                 event_callback("runtime_validation_completed", {"ok": True})
+        ##guard rail: config
+        config_keywords = ["config", "package", "tailwind", "vite", "dependency", "build"]
+
+        query_lower = user_request.lower()
+        config_allowed = any(k in query_lower for k in config_keywords)
+
+        for p in result.artifacts:
+            path = p.file_path.lower()
+
+            if path.endswith("package.json") \
+            or path.endswith("vite.config.ts") \
+            or path.endswith("tailwind.config.js") \
+            or path.endswith("postcss.config.js"):
+
+                if not config_allowed:
+                    raise RuntimeError(
+                        f"Modification of configuration file '{p.file_path}' was blocked. "
+                        "Explicit configuration changes were not requested in the prompt."
+                    )
+        ##guard rail: folder boundary
+        allowed_directories = [
+            "src/pages/",
+            "src/components/",
+        ]
+
+        allowed_exact_files = [
+            "src/app.tsx",
+            "src/app.js",
+            "src/main.tsx",
+            "src/main.js",
+            "index.html",
+            "package.json",
+            "vite.config.ts",
+            "tailwind.config.js",
+            "postcss.config.js",
+        ]
+
+        for p in result.artifacts:
+            path = p.file_path.lower()
+
+            if (
+                not any(path.startswith(d) for d in allowed_directories)
+                and path not in allowed_exact_files
+            ):
+                raise RuntimeError(
+                    f"File path '{p.file_path}' is outside allowed project structure."
+                )
+
+
 
         # 7. Commit validated artifacts
         if event_callback:

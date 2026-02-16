@@ -89,7 +89,7 @@ def _inject_react_vite_tailwind_scaffold(project_id: str):
 </html>
 """,
             language="html",
-            source=ArtifactSource.user_modified,
+            source=ArtifactSource.system_generated,
         ),
         Artifact(
             type=ArtifactType.config,
@@ -120,7 +120,7 @@ def _inject_react_vite_tailwind_scaffold(project_id: str):
 }
 """,
             language="json",
-            source=ArtifactSource.user_modified,
+            source=ArtifactSource.system_generated,
         ),
         Artifact(
             type=ArtifactType.config,
@@ -138,7 +138,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 );
 """,
             language="tsx",
-            source=ArtifactSource.user_modified,
+            source=ArtifactSource.system_generated,
         ),
         Artifact(
             type=ArtifactType.layout,
@@ -157,7 +157,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
 export default App;
 """,
             language="tsx",
-            source=ArtifactSource.user_modified,
+            source=ArtifactSource.system_generated,
         ),
         Artifact(
             type=ArtifactType.config,
@@ -168,7 +168,7 @@ export default App;
 @tailwind utilities;
 """,
             language="css",
-            source=ArtifactSource.user_modified,
+            source=ArtifactSource.system_generated,
         ),
         Artifact(
             type=ArtifactType.config,
@@ -183,7 +183,7 @@ export default App;
 };
 """,
             language="js",
-            source=ArtifactSource.user_modified,
+            source=ArtifactSource.system_generated,
         ),
         Artifact(
             type=ArtifactType.config,
@@ -197,7 +197,7 @@ export default App;
 };
 """,
             language="js",
-            source=ArtifactSource.user_modified,
+            source=ArtifactSource.system_generated,
         ),
         Artifact(
             type=ArtifactType.config,
@@ -211,7 +211,7 @@ export default defineConfig({
 });
 """,
             language="ts",
-            source=ArtifactSource.user_modified,
+            source=ArtifactSource.system_generated,
         ),
     ]
 

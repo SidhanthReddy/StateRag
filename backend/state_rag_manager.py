@@ -131,13 +131,12 @@ class StateRAGManager:
 
         # Authority enforcement
         for old in active_versions:
-            if (
-                old.source == ArtifactSource.user_modified
-                and new_artifact.source != ArtifactSource.user_modified
-            ):
-                raise ValueError(
-                    f"Cannot override user-modified artifact: {old.file_path}"
-                )
+            if old.source == ArtifactSource.user_modified:
+                if new_artifact.source != ArtifactSource.user_modified:
+                    raise ValueError(
+                        f"Cannot override user-modified artifact: {old.file_path}"
+                    )
+
 
         # Versioning
         new_version = 1
