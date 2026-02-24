@@ -5,9 +5,10 @@ from datetime import datetime
 
 from artifact import Artifact
 from state_rag_enums import ArtifactSource, ArtifactType
+from project_store import PROJECTS_DIR
+from file_lock import FileLock, SharedFileLock
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_STATE_PATH = os.path.join(BASE_DIR, "state_rag", "artifacts.json")
 
 
 class StateRAGManager:
@@ -15,7 +16,8 @@ class StateRAGManager:
         self.project_id = project_id
 
         if base_dir is None:
-            base_dir = os.path.join(os.getcwd(), "projects")
+            # Anchor persistence to backend-managed project storage rather than CWD.
+            base_dir = PROJECTS_DIR
 
         self.base_dir = base_dir
 
@@ -34,20 +36,6 @@ class StateRAGManager:
 
         self._load()
 
-    def _resolve_state_path(self, project_id: Optional[str], base_dir: Optional[str]) -> str:
-        if base_dir is None:
-            base_dir = BASE_DIR
-
-        if project_id is None:
-            return DEFAULT_STATE_PATH
-
-        return os.path.join(
-            base_dir,
-            "projects",
-            project_id,
-            "state_rag",
-            "artifacts.json",
-        )
     # ======================
     # Persistence
     # ======================
@@ -57,13 +45,15 @@ class StateRAGManager:
             return
 
         try:
-            with open(self.state_path, "r") as f:
-                content = f.read().strip()
-                if not content:
-                    return
+            # Ensure consistent reads across processes.
+            with SharedFileLock(self.state_path):
+                with open(self.state_path, "r") as f:
+                    content = f.read().strip()
+                    if not content:
+                        return
 
-                raw = json.loads(content)
-                self.artifacts = [Artifact(**a) for a in raw]
+                    raw = json.loads(content)
+                    self.artifacts = [Artifact(**a) for a in raw]
 
         except json.JSONDecodeError:
             print("⚠️ Warning: corrupted state file. Starting fresh.")
@@ -76,13 +66,14 @@ class StateRAGManager:
 
     def _persist(self):
         os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
-        with open(self.state_path, "w") as f:
-            json.dump(
-                [a.dict() for a in self.artifacts],
-                f,
-                indent=2,
-                default=str,
-            )
+        with FileLock(self.state_path):
+            with open(self.state_path, "w") as f:
+                json.dump(
+                    [a.dict() for a in self.artifacts],
+                    f,
+                    indent=2,
+                    default=str,
+                )
 
     # ======================
     # Cleanup (Memory Leak Fix)
@@ -128,14 +119,6 @@ class StateRAGManager:
             a for a in self.artifacts
             if a.file_path == new_artifact.file_path and a.is_active
         ]
-
-        # Authority enforcement
-        for old in active_versions:
-            if old.source == ArtifactSource.user_modified:
-                if new_artifact.source != ArtifactSource.user_modified:
-                    raise ValueError(
-                        f"Cannot override user-modified artifact: {old.file_path}"
-                    )
 
 
         # Versioning
@@ -323,12 +306,16 @@ class StateRAGManager:
 
         threshold = 1.2  # tune this
 
+        artifact_by_id = {a.artifact_id: a for a in artifacts}
+
         ranked = []
         for dist, idx in zip(distances[0], indices[0]):
             if idx == -1:
                 continue
             if dist < threshold:
                 artifact_id = self._faiss_ids[idx]
-                ranked.append(next(a for a in artifacts if a.artifact_id == artifact_id))
+                match = artifact_by_id.get(artifact_id)
+                if match:
+                    ranked.append(match)
 
         return ranked

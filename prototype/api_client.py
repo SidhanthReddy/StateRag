@@ -1,6 +1,7 @@
 import requests
+import os
 
-BASE_URL = "http://127.0.0.1:8000/api"
+BASE_URL = os.getenv("STATE_RAG_API_BASE_URL", "http://127.0.0.1:8000/api")
 
 
 class APIClient:
@@ -12,6 +13,15 @@ class APIClient:
         except Exception as e:
             return {"error": str(e)}
 
+    def ui_mutate(self, project_id, file_path, mutation):
+        return requests.post(
+            f"{BASE_URL}/ui/mutate",
+            json={
+                "project_id": project_id,
+                "file_path": file_path,
+                "mutation": mutation
+            }
+        ).json()
 
     def create_project(self, name):
         return requests.post(
@@ -47,4 +57,8 @@ class APIClient:
                 "user_request": user_request,
                 "allowed_paths": allowed_paths
             }
-        ).json()
+            ).json()
+        
+    def get_artifacts(self, project_id):
+        return requests.get(f"{BASE_URL}/projects/{project_id}/artifacts").json()
+

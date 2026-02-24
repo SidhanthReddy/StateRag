@@ -1,5 +1,6 @@
 import streamlit as st
 from api_client import APIClient
+import re
 
 api = APIClient()
 st.set_page_config(layout="wide")
@@ -29,14 +30,17 @@ projects = api.list_projects()
 if isinstance(projects, dict) and "error" in projects:
     st.sidebar.error("Backend not reachable.")
     st.stop()
+
 elif not isinstance(projects, list):
     st.sidebar.error("Unexpected response from backend.")
     st.stop()
+
 else:
     for p in projects:
         if st.sidebar.button(p["name"], key=p["project_id"]):
             st.session_state.selected_project = p["project_id"]
-            st.session_state.generated_files = []  # Reset on project change
+            st.session_state.generated_files = []
+            st.rerun()
 
 st.sidebar.divider()
 
@@ -61,34 +65,112 @@ if isinstance(project, dict) and "error" in project:
     st.error("Failed to fetch project.")
     st.stop()
 
-artifacts = project.get("artifacts", [])
-
 st.title(project["name"])
 
+# 🔥 IMPORTANT FIX:
+# Always fetch artifacts explicitly
+artifacts_response = api.get_artifacts(st.session_state.selected_project)
+artifacts = artifacts_response.get("artifacts", [])
+
 # -----------------------------
-# File Selection Panel
+# File Viewer
 # -----------------------------
-st.subheader("Project Files (Authoritative State)")
+st.divider()
+st.subheader("File Viewer")
 
-selected_files = []
+file_paths = [a["file_path"] for a in artifacts]
 
-for a in artifacts:
-    icon = "🤖"
-    if a["source"] == "user_modified":
-        icon = "🔒"
-    elif a["source"] == "ai_modified":
-        icon = "✏️"
-
-    checked = st.checkbox(
-        f"{icon} {a['file_path']}",
-        value=True,
-        key=a["artifact_id"]
+if not file_paths:
+    st.warning("No files available yet.")
+    selected_file_path = None
+else:
+    selected_file_path = st.selectbox(
+        "Select a file to inspect / mutate",
+        file_paths
     )
 
-    if checked:
-        selected_files.append(a["file_path"])
+selected_file_content = None
+selected_artifact = None
 
-st.session_state.selected_files = selected_files
+if selected_file_path:
+    for a in artifacts:
+        if a["file_path"] == selected_file_path:
+            selected_file_content = a["content"]
+            selected_artifact = a
+            break
+
+if selected_file_content:
+    st.code(selected_file_content, language="javascript")
+
+# -----------------------------
+# File Selection (State RAG)
+# -----------------------------
+if False:
+    # ----------------------------- # File Selection (State RAG) # ----------------------------- 
+    st.subheader("Project Files (Authoritative State)")
+    selected_files = []
+    for a in artifacts:
+        icon = "🤖"
+        if a["source"] == "user_modified":
+            icon = "🔒"
+        elif a["source"] == "ai_modified":
+            icon = "✏️"
+        elif a["source"] == "system_generated":
+            icon = "⚙️"
+        checked = st.checkbox(
+            f"{icon} {a['file_path']}",
+            value=True,
+            key=f"chk_{a['artifact_id']}"
+        )
+        if checked:
+            selected_files.append(a["file_path"])
+    st.session_state.selected_files = selected_files
+# -----------------------------
+# Node ID Detection
+# -----------------------------
+first_node_id = None
+
+if selected_file_content:
+    match = re.search(r'data-node-id="([^"]+)"', selected_file_content)
+    if match:
+        first_node_id = match.group(1)
+        st.info(f"Detected first node-id: {first_node_id}")
+    else:
+        st.warning("No data-node-id detected yet.")
+
+# -----------------------------
+# Inject IDs
+# -----------------------------
+if selected_file_path:
+    if st.button("Inject Node IDs"):
+        api.ui_mutate(
+            st.session_state.selected_project,
+            selected_file_path,
+            {"type": "noop"}
+        )
+        st.rerun()
+
+# -----------------------------
+# Apply UI Mutation
+# -----------------------------
+if first_node_id and selected_file_path:
+    if st.button("Apply UI Mutation (Add bg-yellow-500)"):
+        response = api.ui_mutate(
+            st.session_state.selected_project,
+            selected_file_path,
+            {
+                "type": "update_classname",
+                "nodeId": first_node_id,
+                "add": ["bg-yellow-500"],
+                "remove": []
+            }
+        )
+
+        if "error" in response:
+            st.error(response["error"])
+        else:
+            st.success("UI Mutation Applied")
+            st.rerun()
 
 # -----------------------------
 # Prompt Input
@@ -103,7 +185,7 @@ user_prompt = st.text_area(
 col1, col2 = st.columns(2)
 
 # -----------------------------
-# Prompt Preview
+# Preview Prompt
 # -----------------------------
 if col1.button("Preview Prompt"):
     if user_prompt:
@@ -115,24 +197,14 @@ if col1.button("Preview Prompt"):
 
         st.session_state.last_prompt_files = preview.get("selected_files", [])
 
-        st.subheader("Prompt Breakdown")
-        st.write(f"Total Tokens: {preview['total_tokens']}")
-        st.write(f"Estimated Cost: ${preview['estimated_cost']}")
-
         st.subheader("State RAG Context")
 
         if st.session_state.last_prompt_files:
             st.success("Selective Retrieval Active")
-            st.write("Files injected into prompt:")
             for f in st.session_state.last_prompt_files:
                 st.write(f"• {f}")
         else:
             st.info("No project files were needed for this request.")
-
-        for section in preview["sections"]:
-            with st.expander(section["title"]):
-                st.write(f"Tokens: {section['tokens']}")
-                st.code(section["content"])
 
 # -----------------------------
 # Generate
@@ -140,35 +212,25 @@ if col1.button("Preview Prompt"):
 if col2.button("Generate"):
     if user_prompt:
         with st.spinner("Generating..."):
-            try:
-                result = api.generate(
-                    st.session_state.selected_project,
-                    user_prompt,
-                    st.session_state.selected_files or ["*"]
-                )
+            result = api.generate(
+                st.session_state.selected_project,
+                user_prompt,
+                st.session_state.selected_files or ["*"]
+            )
 
-                if result.get("injected_files"):
-                    st.subheader("Files Injected Into This Generation")
-                    for f in result["injected_files"]:
-                        st.write(f"- {f}")
+            if result.get("injected_files"):
+                st.subheader("Files Injected Into This Generation")
+                for f in result["injected_files"]:
+                    st.write(f"- {f}")
 
-                st.success("Generation Complete")
-
-                # Persist modified files
-                st.session_state.generated_files = result["artifacts"]
-
-                # Reload project state after commit
-                project = api.get_project(st.session_state.selected_project)
-                artifacts = project.get("artifacts", [])
-
-            except Exception as e:
-                st.error(str(e))
+            st.success("Generation Complete")
+            st.session_state.generated_files = result["artifacts"]
+            st.rerun()
 
 # -----------------------------
-# Show Generated / Modified Files
+# Show Modified / Generated Files
 # -----------------------------
 if st.session_state.generated_files:
-
     st.subheader("Modified / Generated Files")
 
     for artifact in st.session_state.generated_files:

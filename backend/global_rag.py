@@ -7,8 +7,9 @@ from schemas import GlobalRAGEntry
 from file_lock import FileLock, SharedFileLock
 
 EMBEDDING_DIM = 384
-INDEX_PATH = "global_rag.index"
-DATA_PATH = "global_rag.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+INDEX_PATH = os.path.join(BASE_DIR, "global_rag.index")
+DATA_PATH = os.path.join(BASE_DIR, "global_rag.json")
 
 
 class GlobalRAG:
@@ -56,6 +57,8 @@ class GlobalRAG:
         - Process A acquires lock, writes, releases
         - Process B waits, then writes safely
         """
+        os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
+
         # FAISS index (atomic write - no lock needed)
         faiss.write_index(self.index, INDEX_PATH)
         

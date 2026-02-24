@@ -89,6 +89,10 @@ class SharedFileLock:
     
     def __enter__(self):
         """Acquire shared lock"""
+        # Ensure lock file exists (needed for Windows which opens directly)
+        if not os.path.exists(self.filepath):
+            open(self.filepath, 'w').close()
+
         if sys.platform == "win32":
             # Windows doesn't support shared locks with msvcrt
             # Fall back to exclusive lock
@@ -98,9 +102,6 @@ class SharedFileLock:
         else:
             # Unix: use shared lock
             import fcntl
-            if not os.path.exists(self.filepath):
-                open(self.filepath, 'w').close()
-            
             self.lock_file = open(self.filepath, "r+")
             fcntl.flock(self.lock_file.fileno(), fcntl.LOCK_SH)
         

@@ -1,6 +1,6 @@
 from typing import Callable, List, Optional
 import time
-
+import re
 from state_rag_manager import StateRAGManager
 from global_rag import GlobalRAG
 from validator import Validator
@@ -10,8 +10,8 @@ from state_rag_enums import ArtifactType
 from llm_adapter import LLMAdapter
 from llm_output_parser import parse_llm_output
 from runtime_validator import validate_runtime
-
-
+from node_registry_manager import NodeRegistryManager
+from tailwind_utils import infer_tailwind_group
 class Orchestrator:
     """
     Central execution controller.
@@ -41,6 +41,7 @@ class Orchestrator:
         self.global_rag = global_rag or GlobalRAG()
         self.validator = Validator()
         self.llm = LLMAdapter(provider=llm_provider)
+        self.project_id = project_id 
     def _build_prompt(
         self,
         active_artifacts,
@@ -61,6 +62,8 @@ class Orchestrator:
         for a in active_artifacts:
             state_section += f"\nFILE: {a.file_path}\n{a.content}\n"
 
+        lock_section = self._build_lock_section(allowed_paths)
+
         global_section = "GLOBAL REFERENCES (ADVISORY):\n"
         for ref in global_refs:
             global_section += f"\n{ref}\n"
@@ -79,6 +82,7 @@ class Orchestrator:
         return (
             system_section
             + state_section
+            + lock_section
             + global_section
             + allowed_section
             + user_section
@@ -144,12 +148,20 @@ class Orchestrator:
         if event_callback:
             event_callback("prompt_build_completed", None)
 
+        print("\n" + "="*80)
+        print("FINAL LLM PROMPT")
+        print("="*80)
+        print(prompt)
+        print("="*80 + "\n")
+
         # 4. Invoke LLM (stateless) with retry logic
         if event_callback:
             event_callback("llm_call_started", None)
         raw_output = self._llm_generate_with_retry(prompt)
         if event_callback:
             event_callback("llm_call_completed", None)
+        print("RAW LLM OUTPUT:")
+        print(raw_output)
 
         # 5. Parse LLM output (strict contract)
         proposed = parse_llm_output(raw_output)
@@ -220,6 +232,15 @@ class Orchestrator:
             "tailwind.config.js",
             "postcss.config.js",
         ]
+        lower = user_request.lower()
+
+        is_rewrite = (
+            "rewrite" in lower
+            or "start from scratch" in lower
+            or "replace entire" in lower
+            or ("redesign" in lower and "complete" in lower)
+            or ("rebuild" in lower and "complete" in lower)
+        )
 
         for p in result.artifacts:
             path = p.file_path.lower()
@@ -232,6 +253,21 @@ class Orchestrator:
                     f"File path '{p.file_path}' is outside allowed project structure."
                 )
 
+
+        for p in result.artifacts:
+            old = next(
+                (a for a in active_artifacts if a.file_path == p.file_path),
+                None
+            )
+
+            if old:
+                self._enforce_node_locks(
+                    self.project_id,
+                    p.file_path,
+                    old.content,
+                    p.content,
+                    rewrite_mode=is_rewrite
+                )
 
 
         # 7. Commit validated artifacts
@@ -263,10 +299,17 @@ class Orchestrator:
             committed.append(
                 self.state_rag.commit(artifact)
             )
+        if is_rewrite:
+            registry = NodeRegistryManager(self.project_id)
+            for fp in {a.file_path for a in result.artifacts}:
+                registry.registry[fp] = {}
+            registry._save()
 
         if event_callback:
             event_callback("commit_completed", {"count": len(committed)})
         return committed, active_artifacts
+    
+
 
 
     # --------------------------------------------------
@@ -324,7 +367,7 @@ class Orchestrator:
         while attempt < max_retries:
             try:
                 return self.llm.generate(prompt)
-            except Exception as e:
+            except Exception:
                 attempt += 1
                 if attempt >= max_retries:
                     raise
@@ -356,6 +399,7 @@ class Orchestrator:
             return ArtifactType.config
 
         return ArtifactType.component
+   
     def _build_runtime_artifacts(self, active_artifacts, proposed):
         active_lookup = {a.file_path: a for a in active_artifacts}
         merged = dict(active_lookup)
@@ -374,3 +418,124 @@ class Orchestrator:
             )
 
         return list(merged.values())
+    
+    def extract_node_classes(self, code: str):
+        pattern = r'<[^>]*data-node-id="([^"]+)"[^>]*className="([^"]*)"'
+        matches = re.findall(pattern, code)
+
+        result = {}
+        for node_id, class_str in matches:
+            result[node_id] = class_str.split()
+
+        return result
+
+    def extract_all_node_ids(self, code: str):
+        pattern = r'data-node-id="([^"]+)"'
+        return re.findall(pattern, code)
+
+    def _enforce_node_locks(self, project_id, file_path, old_content, new_content, rewrite_mode):
+        # --- NODE ID INTEGRITY CHECKS ---
+        if rewrite_mode:
+            return
+        new_node_ids = self.extract_all_node_ids(new_content)
+
+        # 1️⃣ Missing node check (especially important for locked nodes)
+        registry = NodeRegistryManager(project_id)
+        file_registry = registry.registry.get(file_path, {})
+
+        for node_id, data in file_registry.items():
+
+            is_protected = (
+                data.get("locked_groups")
+                or data.get("user_modified")
+            )
+
+            if not is_protected:
+                continue
+
+            if node_id not in new_node_ids:
+                raise RuntimeError(
+                    f"Protected node '{node_id}' was removed from {file_path}. "
+                    "Removal of protected nodes is not allowed."
+                )
+
+
+        # 2️⃣ Duplicate node ID check
+        if len(new_node_ids) != len(set(new_node_ids)):
+            raise RuntimeError(
+                f"Duplicate data-node-id detected in {file_path}. "
+                "Node IDs must remain unique."
+            )
+
+        # 3️⃣ Node ID mutation check
+
+        old_nodes = self.extract_node_classes(old_content)
+        new_nodes = self.extract_node_classes(new_content)
+
+        file_registry = registry.registry.get(file_path, {})
+
+        for node_id, old_classes in old_nodes.items():
+            if node_id not in file_registry:
+                continue
+
+            locked_groups = file_registry[node_id]["locked_groups"]
+
+            if not locked_groups:
+                continue
+
+            new_classes = new_nodes.get(node_id, [])
+
+            for group in locked_groups:
+                old_group_classes = [
+                    c for c in old_classes
+                    if infer_tailwind_group(c) == group
+                ]
+
+                new_group_classes = [
+                    c for c in new_classes
+                    if infer_tailwind_group(c) == group
+                ]
+
+                if set(old_group_classes) != set(new_group_classes):
+                    raise RuntimeError(
+                        f"LLM attempted to modify locked group '{group}' "
+                        f"on node {node_id} in {file_path}"
+                    )
+   
+    def _build_lock_section(self, allowed_paths: List[str]) -> str:
+        registry = NodeRegistryManager(self.project_id)
+
+        lines = []
+
+        for file_path, nodes in registry.registry.items():
+
+            # Only include files that are allowed in this request
+            if "*" not in allowed_paths and file_path not in allowed_paths:
+                continue
+
+            file_lines = []
+
+            for node_id, data in nodes.items():
+                locked_groups = data.get("locked_groups", [])
+
+                if locked_groups:
+                    file_lines.append(
+                        f"  - Node {node_id}: locked groups → {', '.join(locked_groups)}"
+                    )
+
+            if file_lines:
+                lines.append(f"FILE: {file_path}")
+                lines.extend(file_lines)
+
+        if not lines:
+            return ""
+
+        header = (
+            "LOCKED NODE CONSTRAINTS (STRICT ENFORCEMENT):\n"
+            "The following node style groups were modified by the user.\n"
+            "These groups are locked by the user.\n"
+            "You MUST preserve the exact classes belonging to these groups.\n"
+            "You must preserve these groups. Modify only other properties if possible.  \n\n"
+        )
+
+        return header + "\n".join(lines) + "\n\n"

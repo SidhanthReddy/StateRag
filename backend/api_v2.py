@@ -6,6 +6,10 @@ from typing import List, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
+from tailwind_utils import infer_tailwind_group
+from node_registry_manager import NodeRegistryManager
+import re
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from state_rag_enums import ArtifactType, ArtifactSource
@@ -24,6 +28,7 @@ from state_rag_manager import StateRAGManager
 
 
 app = FastAPI()
+AST_SERVICE_URL = os.getenv("AST_SERVICE_URL", "http://127.0.0.1:3001/mutate")
 
 
 class ProjectCreateRequest(BaseModel):
@@ -57,6 +62,10 @@ class PromptPreviewResponse(BaseModel):
     estimated_cost: float
     selected_files: List[str]
 
+class UIMutationRequest(BaseModel):
+    project_id: str
+    file_path: str
+    mutation: dict
 
 def _init_project_storage(project_id: str) -> None:
     state_dir = os.path.join(PROJECTS_DIR, project_id, "state_rag")
@@ -317,6 +326,18 @@ def _build_prompt_text(sections: List[PromptSection]) -> str:
 def list_projects_endpoint():
     return list_projects()
 
+@app.get("/api/projects/{project_id}/artifacts")
+def list_project_artifacts(project_id: str):
+    if not get_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    state_rag = StateRAGManager(project_id=project_id)
+    artifacts = state_rag.retrieve(file_paths=None,user_query="")
+
+    return {
+        "artifacts": [a.dict() for a in artifacts]
+    }
+
 
 @app.post("/api/projects", response_model=ProjectResponse)
 def create_project_endpoint(req: ProjectCreateRequest):
@@ -439,3 +460,72 @@ def generate_code(req: GenerateRequest):
         "generation_time": round(duration, 3),
     }
 
+@app.post("/api/ui/mutate")
+def ui_mutate(req: UIMutationRequest):
+    project = get_project(req.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    state_rag = StateRAGManager(project_id=req.project_id)
+
+    active = state_rag.retrieve(file_paths=[req.file_path])
+    if not active:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    artifact = active[0]
+
+    # Call AST service
+    import requests
+    try:
+        response = requests.post(
+            AST_SERVICE_URL,
+            json={
+                "code": artifact.content,
+                "mutation": req.mutation
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+    except requests.Timeout:
+        raise HTTPException(status_code=504, detail="AST service timed out")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"AST service error: {str(e)}")
+
+    updated_code = response.json()["updated"]
+    registry = NodeRegistryManager(req.project_id)
+
+    node_ids = re.findall(r'data-node-id="([^"]+)"', updated_code)
+
+    for node_id in node_ids:
+        element_type = detect_element_type(updated_code, node_id)
+        registry.register_node(req.file_path, node_id, element_type)
+
+    if req.mutation["type"] == "update_classname":
+        added_classes = req.mutation.get("add", [])
+
+        for cls in added_classes:
+            group = infer_tailwind_group(cls)
+            if group:
+                registry.lock_group(req.file_path, req.mutation["nodeId"], group)
+
+    # Commit as user_modified
+    updated_artifact = Artifact(
+        type=artifact.type,
+        name=artifact.name,
+        file_path=artifact.file_path,
+        content=updated_code,
+        language=artifact.language,
+        source=ArtifactSource.user_modified,
+    )
+
+    committed = state_rag.commit(updated_artifact)
+
+    return committed.dict()
+
+
+def detect_element_type(code: str, node_id: str):
+    pattern = rf'<(\w+)[^>]*data-node-id="{node_id}"'
+    match = re.search(pattern, code)
+    if match:
+        return match.group(1)
+    return "unknown"
